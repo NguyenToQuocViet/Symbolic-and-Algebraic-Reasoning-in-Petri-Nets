@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from pyeda.inter import *
 
+
 @dataclass
 class PetriNet:
     """
@@ -283,94 +284,140 @@ class BDDReachabilityResult:
     """
 
     def __init__(self,
-                 manager: Any,
                  reachable: Any,
                  var_map: Dict[int, Any],
                  num_states: int):
-        self.manager = manager
         self.reachable = reachable
         self.var_map = var_map
         self.num_states = num_states
 
-def buildBDD(pn: PetriNet) -> tuple[BinaryDecisionDiagram, BinaryDecisionDiagram]:
-    # Mã hóa tên place thành các biến Boolean
-    # task 3.2 có thể sửa function để lấy thêm 2 dict này, 
-    # hoặc tiếp tục các bước sau trên function này luôn
-    X = {p: exprvar(p) for p in pn.places}         # current
-    Xp = {p: exprvar(p + "_p") for p in pn.places} # next
+def buildBDD(pn: PetriNet) -> tuple:
+    # Tạo biến BDD cho mỗi place
+    X = {p: exprvar(p) for p in pn.places}
+    Xp = {p: exprvar(p + "_p") for p in pn.places}
 
     transition_relations = []
 
-    # Với mỗi transition
-    #   enable[t] = AND mọi biến place (đặt là X) nào có pre[t][p] == 1
-    #       nếu pre[t][p] == 0, xem như là TRUE
-    #
-    #   Với mỗi place
-    #       updates[t][p] = place_next (đặt là Xp)  nếu post[t][p] == 1
-    #                       not place_next          nếu post[t][p] == 0 và pre[t][p] == 1
-    #                       place_next xnor place   nếu cả pre và post == 0
-    #
-    #   BDD của transition R[t] = enable[t] AND với AND mọi updates[t][p]
-    for t in pn.transitions:
-        # Enabling condition
-        enable = And(*[
-            X[p] for p in pn.places if pn.pre[t][p] == 1
-        ]) if any(pn.pre[t][p] == 1 for p in pn.places) else expr(True)
+    # Với mỗi transition (theo index)
+    for t_idx, t in enumerate(pn.transitions):
 
-        # Update constraints
+        # ENABLING CONDITION: tất cả pre[t][p] = 1 phải có X[p] = True
+        enable_list = []
+        for p_idx, p in enumerate(pn.places):
+            if pn.pre[t_idx][p_idx] == 1:
+                enable_list.append(X[p])
+        enable = And(*enable_list) if enable_list else expr(True)
+
+        # UPDATE RULES
         updates = []
-        for p in pn.places:
-            if pn.post[t][p] == 1:
-                updates.append(Xp[p])          # token produced
-            elif pn.pre[t][p] == 1:
-                updates.append(~Xp[p])         # token consumed
-            else:
-                updates.append(Xnor(Xp[p], X[p]))  # unchanged
+        for p_idx, p in enumerate(pn.places):
+            # Cần tách rõ các trường hợp pre, post
+            is_pre = pn.pre[t_idx][p_idx] == 1
+            is_post = pn.post[t_idx][p_idx] == 1
+            
+            if is_post and not is_pre:
+                # token created (Sản xuất: 0 -> 1)
+                updates.append(Xp[p])
+            elif is_pre and not is_post:
+                # token consumed (Tiêu thụ: 1 -> 0)
+                updates.append(~Xp[p])
+            # Trường hợp 0->0 (Unchanged) và 1->1 (Conserved) đều là X' <-> X
+            elif is_pre == is_post:
+                # Unchanged (0->0) hoặc Conserved (1->1)
+                updates.append(Xnor(Xp[p], X[p]))
 
         transition_relations.append(And(enable, And(*updates)))
 
-    # BDD của mọi transition = OR mọi R[t]
+    # OR tất cả transition relations
     R_expr = Or(*transition_relations)
 
-    # BDD của mỗi marking M0[p] = place     nếu M0[p] == 1
-    #                             not place nếu M0[p] == 0
-    # BDD của M0 = AND mọi M0[p]
+    # Initial state BDD
     init_list = []
-    for i in range(len(pn.places)):
-        if pn.M0[i] == 1:
+    for p_idx, p in enumerate(pn.places):
+        if pn.M0[p_idx] == 1:
             init_list.append(X[p])
         else:
             init_list.append(~X[p])
+
     init_expr = And(*init_list)
+
+    return expr2bdd(R_expr), expr2bdd(init_expr), X, Xp
+
+
+def computeBDDReachability(
+    initial_bdd: BinaryDecisionDiagram,
+    transition_bdd: BinaryDecisionDiagram,
+    X: Dict[str, Any], # Expression Nodes
+    Xp: Dict[str, Any], # Expression Nodes
+    places: List[str]
+) -> Tuple[BinaryDecisionDiagram, int]:
     
-    # BinaryDecisionDiagram không có biểu diễn str để đọc trực tiếp được
-    # Có thể dùng bbd2expr(bdd: BinaryDecisionDiagram) để chuyển về expression
-    return expr2bdd(R_expr), expr2bdd(init_expr)
+    R = initial_bdd
+    
+    # TRÍCH XUẤT VÀ CHUẨN BỊ BDD VARIABLES
+    X_bdd = {p: bddvar(p) for p in places}
+    
+    # Danh sách BDD Variables hiện tại để lượng tử hóa
+    X_vars_list = [X_bdd[p] for p in places] 
+    
+    # Map BDD object -> BDD object cho compose (Xp -> X)
+    var_map_bdd = {
+       bddvar(p + "_p"): bddvar(p) for p in places
+    }
+    
+    #FIXPOINT ITERATION
+    while True:
+        R_old = R
+        img = R & transition_bdd
+        post = img
+        
+        # Existential Quantification
+        for x_var in X_vars_list:
+            post = post.restrict({x_var: False}) | post.restrict({x_var: True})
+        
+        # Đổi tên biến: Xp → X
+        post_renamed = post.compose(var_map_bdd)
+        
+        R_new = R | post_renamed
+        
+        #Cố định -> Break
+        if R_new.equivalent(R_old):
+            R = R_new
+            break
+        
+        R = R_new
+    
+    #Số state 
+    num_states = int(R.satisfy_count())
+    
+    return R, num_states
 
 def bddReachability(pn: PetriNet) -> BDDReachabilityResult:
-    """
-    TASK 3:
-    - Mã hoá mỗi place p thành một biến Boolean x_p
-    - Mã hoá marking M thành valuation của các biến (x_p = 1 iff M(p) = 1)
-    - Dùng symbolic image computation:
-        R0 = {M0}
-        Ri+1 = Ri ∪ Post(Ri)
-      cho đến khi cố định (fixpoint):
-        R_{i+1} == R_i
-    - Trả về BDD biểu diễn Reach(M0), và số state reachable.
-
-    TODO: nhóm chọn thư viện BDD và hiện thực chi tiết.
-    """
-    # TODO:
-    # Sử dụng PyEDA để tạo BDD.
-    # Task 3.1:
-    # 1) Khởi tạo BDD manager & biến cho mỗi place
-    # 2) Xây BDD cho initial state M0
-    # 3) Xây BDD cho quan hệ chuyển tiếp (transition relation)
-    # Task 3.2:
-    # 4) Lặp fixpoint: R_{i+1} = R_i ∪ Post(R_i) cho đến hội tụ
-    # 5) Đếm số state trong BDD (nếu thư viện hỗ trợ)
-    raise NotImplementedError
+    """Hàm chính Task 3: Tính toán tập khả đạt bằng BDD."""
+    
+    transition_bdd, initial_bdd, X, Xp = buildBDD(pn)
+    
+    # Dùng fixpoint iteration
+    reachable_bdd, num_states = computeBDDReachability(
+        initial_bdd,
+        transition_bdd,
+        X,
+        Xp,
+        pn.places 
+    )
+    
+    # Tạo var_map (ánh xạ Place Index -> BDD Variable Object)
+    X_bdd = {p: bddvar(p) for p in pn.places}
+    var_map = {i: X_bdd[pn.places[i]] for i in range(len(pn.places))}
+    
+    # Kết quả
+    return BDDReachabilityResult(
+        reachable=reachable_bdd,
+        var_map=var_map,
+        num_states=num_states 
+    )
+    
+    
 
 
 # ============================================================
@@ -454,6 +501,8 @@ def summarizePetriNet(pn: PetriNet) -> None:
     for j, tid in enumerate(pn.transitions):
         name = pn.trans_name.get(tid, tid)
         print(f"  t{j}: id={tid}, name={name}")
+        
+
 
 
 def main():
@@ -486,7 +535,8 @@ def main():
     # Task 2: explicit reachability
     if args.task in ("2", "all"):
         print("\n[Task 2] Explicit reachability (BFS = {})".format(args.bfs))
-        reachable_markings = explicitReachability(pn, use_bfs=args.bfs)
+        reachable_markings = explicitReachability(pn)
+
         # TODO: in thêm thống kê: số state, ví dụ một vài marking, ...
 
     # Task 3: BDD-based reachability
@@ -521,6 +571,6 @@ def main():
             print("  -> Marking tối ưu:", M_opt)
             print("     Giá trị objective:", val)
 
-
 if __name__ == "__main__":
     main()
+
