@@ -11,6 +11,8 @@ import argparse
 import xml.etree.ElementTree as ET
 from collections import deque
 from pyeda.inter import *
+from pulp import LpProblem, LpVariable, LpBinary, LpMinimize, lpSum, PULP_CBC_CMD
+
 
 
 @dataclass
