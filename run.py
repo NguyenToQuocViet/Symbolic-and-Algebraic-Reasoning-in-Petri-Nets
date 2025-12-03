@@ -11,7 +11,7 @@ def main():
     # ------------------------------------------------------
     # 1. Load Petri Net từ file PNML
     # ------------------------------------------------------
-    filename = "pnml_file/fsm.pnml" # đổi file tại đây
+    filename = "pnml_file/example.pnml" # đổi file tại đây
     print("Loading PNML:", filename)
 
     pn = PetriNet.from_pnml(filename)
@@ -91,6 +91,24 @@ def main():
         "A2_With_Nurse": 2, "A2_With_Doctor": 3, "A2_In_Surgery": 5,
         "B1_With_Nurse": 1, "B1_With_Doctor": 2,
         "Res_Nurse_1": 0, "Res_Nurse_2": 0, "Res_Doctor": 0, "Res_SurgeryRoom": 0
+        }
+    elif filename == "pnml_file/example.pnml":  
+        weight_map = {
+            # Mục tiêu: Càng nhiều người ĂN càng tốt
+            "EAT_1": 10, "EAT_2": 10, "EAT_3": 10, 
+            "EAT_4": 10, "EAT_5": 10, "EAT_6": 10,
+            
+            # Phạt trạng thái chờ (để tránh Deadlock)
+            "WAIT_LEFT_FORK_1": -1, "WAIT_RIGHT_FORK_1": -1,
+            "WAIT_LEFT_FORK_2": -1, "WAIT_RIGHT_FORK_2": -1,
+            "WAIT_LEFT_FORK_3": -1, "WAIT_RIGHT_FORK_3": -1,
+            "WAIT_LEFT_FORK_4": -1, "WAIT_RIGHT_FORK_4": -1,
+            "WAIT_LEFT_FORK_5": -1, "WAIT_RIGHT_FORK_5": -1,
+            "WAIT_LEFT_FORK_6": -1, "WAIT_RIGHT_FORK_6": -1,
+            
+            # Tài nguyên: 0
+            "FORK_1": 0, "FORK_2": 0, "FORK_3": 0,
+            "FORK_4": 0, "FORK_5": 0, "FORK_6": 0
         }
     else:
         weight_map = {
